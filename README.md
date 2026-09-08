@@ -30,19 +30,19 @@ CLI RAG tool for your docs. Index 30+ document formats (markdown, PDF, DOCX, EPU
 curl -LsSf https://github.com/huydhoang/kb/raw/main/install.sh | sh
 
 # Or with uv directly (all optional deps: PDF, Office, RTF, chunking)
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[all]"
+uv tool install "kb[all] @ git+https://github.com/huydhoang/kb.git"
 
 # Minimal (markdown, HTML, plain text, email, EPUB, ODT — no extra deps)
-uv tool install --from "git+https://github.com/huydhoang/kb.git" kb
+uv tool install "kb @ git+https://github.com/huydhoang/kb.git"
 
 # Pick extras individually
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[pdf]"       # + PDF
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[office]"    # + DOCX, PPTX, XLSX
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[rtf]"       # + RTF
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[local-embed]" # + local embeddings (Granite R2, no API cost)
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[rerank]"    # + local cross-encoder reranking
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[expand]"    # + local query expansion (FLAN-T5)
-uv tool install --from "git+https://github.com/huydhoang/kb.git" "kb[local-llm]" # + local HyDE generation (transformers + torch)
+uv tool install "kb[pdf] @ git+https://github.com/huydhoang/kb.git"       # + PDF
+uv tool install "kb[office] @ git+https://github.com/huydhoang/kb.git"    # + DOCX, PPTX, XLSX
+uv tool install "kb[rtf] @ git+https://github.com/huydhoang/kb.git"       # + RTF
+uv tool install "kb[local-embed] @ git+https://github.com/huydhoang/kb.git" # + local embeddings (Granite R2, no API cost)
+uv tool install "kb[rerank] @ git+https://github.com/huydhoang/kb.git"    # + local cross-encoder reranking
+uv tool install "kb[expand] @ git+https://github.com/huydhoang/kb.git"    # + local query expansion (FLAN-T5)
+uv tool install "kb[local-llm] @ git+https://github.com/huydhoang/kb.git" # + local HyDE generation (transformers + torch)
 ```
 
 **Runs fully local — no API keys required.** Set `embed_method = "local"` in config (see [Configuration](#configuration)) and use local backends for HyDE (`hyde_method = "local"`), reranking (`rerank_method = "cross-encoder"`), and query expansion (`expand_method = "local"`). Only `kb ask` needs an LLM for the final answer — point it at a local model via Ollama or similar.
