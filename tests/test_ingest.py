@@ -8,6 +8,7 @@ from kb.ingest import (
     _index_file,
     _is_ignored,
     _load_ignore_patterns,
+    _matches_include,
     _parse_frontmatter_tags,
     md5_hash,
 )
@@ -69,6 +70,23 @@ class TestIsIgnored:
     def test_no_match(self, tmp_path):
         (tmp_path / "good.md").touch()
         assert not _is_ignored(tmp_path / "good.md", tmp_path, ["*.tmp"])
+
+
+class TestMatchesInclude:
+    def test_matches_filename(self, tmp_path):
+        assert _matches_include(tmp_path / "BZ001.md", tmp_path, ["BZ*.md"])
+
+    def test_matches_relative_path(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        target = sub / "BZ001.md"
+        target.touch()
+        assert _matches_include(target, tmp_path, ["sub/BZ*"])
+        # Bare filename patterns also match nested files (same as .kbignore)
+        assert _matches_include(target, tmp_path, ["BZ*.md"])
+
+    def test_no_match(self, tmp_path):
+        assert not _matches_include(tmp_path / "other.md", tmp_path, ["BZ*.md"])
 
 
 class TestParseFrontmatterTags:

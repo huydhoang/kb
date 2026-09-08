@@ -126,6 +126,100 @@ class TestIndexDirectory:
         assert "Found 0 files" in out
 
 
+class TestIncludePatterns:
+    def _index(self, docs, cfg):
+        client = _mock_openai_client()
+        client.embeddings.create.return_value.data = [
+            MagicMock(embedding=[0.1] * 4) for _ in range(20)
+        ]
+        with patch("kb.ingest.OpenAI", return_value=client):
+            index_directory(docs, cfg)
+        return client
+
+    def _doc_paths(self, cfg):
+        conn = connect(cfg)
+        try:
+            return [r[0] for r in conn.execute("SELECT path FROM documents").fetchall()]
+        finally:
+            conn.close()
+
+    def test_include_only(self, tmp_path):
+        cfg = _make_cfg(tmp_path, include_patterns=["BZ*.md"])
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+        (docs / "BZ002.md").write_text("# BZ2\n\nIncluded content here yes.")
+        (docs / "other.md").write_text("# Other\n\nExcluded content here yes.")
+
+        self._index(docs, cfg)
+        paths = self._doc_paths(cfg)
+        assert any("BZ001" in p for p in paths)
+        assert any("BZ002" in p for p in paths)
+        assert not any("other" in p for p in paths)
+
+    def test_empty_include_indexes_everything(self, tmp_path):
+        cfg = _make_cfg(tmp_path, include_patterns=[])
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("# A\n\nContent here is long enough.")
+        (docs / "b.md").write_text("# B\n\nContent here is long enough.")
+
+        self._index(docs, cfg)
+        assert len(self._doc_paths(cfg)) == 2
+
+    def test_ignore_wins_over_include(self, tmp_path):
+        cfg = _make_cfg(tmp_path, include_patterns=["BZ*.md"])
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+        (docs / "BZ002.md").write_text("# BZ2\n\nIgnored content here yes.")
+        (docs / ".kbignore").write_text("BZ002.md\n")
+
+        self._index(docs, cfg)
+        paths = self._doc_paths(cfg)
+        assert any("BZ001" in p for p in paths)
+        assert not any("BZ002" in p for p in paths)
+
+    def test_excluded_files_not_extracted(self, tmp_path):
+        from kb import ingest as ingest_mod
+
+        cfg = _make_cfg(tmp_path, include_patterns=["BZ*.md"])
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+        (docs / "other.md").write_text("# Other\n\nExcluded content here yes.")
+
+        real_extract = ingest_mod.extract_text
+        seen: list[str] = []
+
+        def spy(file_path, **kwargs):
+            seen.append(file_path.name)
+            return real_extract(file_path, **kwargs)
+
+        client = _mock_openai_client()
+        client.embeddings.create.return_value.data = [
+            MagicMock(embedding=[0.1] * 4) for _ in range(20)
+        ]
+        with (
+            patch("kb.ingest.OpenAI", return_value=client),
+            patch.object(ingest_mod, "extract_text", side_effect=spy),
+        ):
+            index_directory(docs, cfg)
+
+        assert "BZ001.md" in seen
+        assert "other.md" not in seen
+
+    def test_include_skipped_reported(self, tmp_path, capsys):
+        cfg = _make_cfg(tmp_path, include_patterns=["BZ*.md"])
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+        (docs / "other.md").write_text("# Other\n\nExcluded content here yes.")
+
+        self._index(docs, cfg)
+        assert "include filter" in capsys.readouterr().out
+
+
 class TestOrphanChunkCleanup:
     def test_removes_orphaned_chunks(self, tmp_path):
         """When a file is re-indexed with fewer chunks, old chunks are deleted."""

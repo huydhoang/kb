@@ -1,6 +1,34 @@
-# .kbignore Patterns
+# Include / Ignore Patterns
 
-Exclude files from `kb index` by placing a `.kbignore` in your source directory.
+`sources` in `.kb.toml` are directories only (no globs). Use `include_patterns`
+to whitelist subsets and `.kbignore` to exclude files.
+
+## Two workflows
+
+1. Incremental add + normal index
+   - `kb add <dir>` persists directories to `sources`.
+   - `kb index` indexes everything in `.kb.toml` (empty `include_patterns` = all files).
+   - Re-indexing is incremental: unchanged files are skipped via MD5, changed
+     files are reprocessed, unchanged chunks are reused.
+2. Scoped index (persistent)
+   - `kb index <dir> --include "PATTERN"` merges the directory into `sources`
+     (existing entries are never dropped) and merges the pattern into
+     `include_patterns`, saves `.kb.toml`, then indexes the requested scope.
+   - Existing `sources` are preserved so the TOML keeps describing the full
+     scope represented by the DB. The directory entry stays directory-only;
+     it is never replaced by a glob.
+   - `include_patterns` is global: on later full `kb index` runs it applies to
+     every source. Supply additional `--include` patterns to broaden the scope
+     (a file must match at least one pattern). To return to full indexing,
+     clear `include_patterns` and re-run `kb index`.
+
+## Precedence
+
+1. Extension filter first (supported formats only).
+2. `include_patterns` (if non-empty, a file must match at least one pattern;
+   empty = all files). Filtering happens before extraction, hashing,
+   chunking, and embedding, so excluded files cost nothing.
+3. `.kbignore` always wins over `include_patterns`.
 
 ## How it works
 

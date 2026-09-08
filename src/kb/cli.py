@@ -56,7 +56,7 @@ Usage:
   kb add <dir> [dir...]          Add source directories
   kb remove <dir> [dir...]       Remove source directories
   kb sources                     List configured sources
-  kb index [DIR...] [--no-size-limit]  Index sources (skip files > max_file_size_mb)
+  kb index [DIR...] [--no-size-limit] [--include PATTERN ...]  Index sources (skip files > max_file_size_mb)
   kb allow <file>                Whitelist a large file for indexing
   kb search "query" [k] [--threshold N] [--expand] [--json|--csv|--md]  Hybrid search (default k=5)
   kb fts "query" [k] [--json|--csv|--md]          Keyword-only search (no embedding, instant)
@@ -227,17 +227,90 @@ def cmd_allow(cfg: Config, files: list[str]):
 
 def cmd_index(cfg: Config, args: list[str]):
     no_size_limit = "--no-size-limit" in args
-    dir_args = [a for a in args if a != "--no-size-limit"]
+    cli_includes: list[str] | None = None
+    dir_args: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--no-size-limit":
+            pass
+        elif a == "--include":
+            i += 1
+            if i >= len(args) or args[i].startswith("--"):
+                print_error("Usage: kb index [DIR...] [--include PATTERN ...]")
+                sys.exit(1)
+            if cli_includes is None:
+                cli_includes = []
+            cli_includes.append(args[i])
+        elif a.startswith("--include="):
+            pat = a[len("--include=") :]
+            if not pat:
+                print_error("Usage: kb index [DIR...] [--include PATTERN ...]")
+                sys.exit(1)
+            if cli_includes is None:
+                cli_includes = []
+            cli_includes.append(pat)
+        else:
+            dir_args.append(a)
+        i += 1
 
-    if dir_args:
-        dirs = [Path(a).resolve() for a in dir_args]
-    elif cfg.source_paths:
-        dirs = cfg.source_paths
+    scoped = cli_includes is not None
+
+    if scoped:
+        # Persistent scoped index: merge DIRs + patterns into .kb.toml,
+        # then index the requested scope. Never drop existing sources:
+        # explicitly supplied directories are added, existing entries kept.
+        # include_patterns is global and merged by union (a file must match
+        # at least one pattern). .kbignore still wins at index time.
+        # The source directory entry itself is always preserved
+        # (directory-only, never replaced by a glob) so the TOML keeps
+        # describing the full scope represented by the DB.
+        if not cfg.config_path:
+            print_error("No config found. Run 'kb init' first.")
+            sys.exit(1)
+        resolved_dirs: list[Path] = []
+        for d in dir_args:
+            p = Path(d).expanduser().resolve()
+            if not p.is_dir():
+                print_error(f"Not a directory: {d}")
+                sys.exit(1)
+            resolved_dirs.append(p)
+        for p in resolved_dirs:
+            if cfg.scope == "global":
+                entry = str(p)
+            else:
+                try:
+                    entry = str(p.relative_to(cfg.config_dir))
+                except ValueError:
+                    entry = str(p)
+            if entry not in cfg.sources:
+                cfg.sources.append(entry)
+                print(f"  {style('Added:', 'success')} {style(entry, 'path')}")
+        assert cli_includes is not None
+        for pat in cli_includes:
+            if pat not in cfg.include_patterns:
+                cfg.include_patterns.append(pat)
+        save_config(cfg)
+        print(style(f"Saved {cfg.config_path}", "success"))
+        if resolved_dirs:
+            dirs = resolved_dirs
+        elif cfg.source_paths:
+            dirs = cfg.source_paths
+        else:
+            print(style("No sources configured. Either:", "warning"))
+            print("  1. Run 'kb add <dir>' to add source directories")
+            print("  2. Pass directories explicitly: kb index ~/docs ~/notes")
+            sys.exit(1)
     else:
-        print(style("No sources configured. Either:", "warning"))
-        print("  1. Run 'kb add <dir>' to add source directories")
-        print("  2. Pass directories explicitly: kb index ~/docs ~/notes")
-        sys.exit(1)
+        if dir_args:
+            dirs = [Path(a).expanduser().resolve() for a in dir_args]
+        elif cfg.source_paths:
+            dirs = cfg.source_paths
+        else:
+            print(style("No sources configured. Either:", "warning"))
+            print("  1. Run 'kb add <dir>' to add source directories")
+            print("  2. Pass directories explicitly: kb index ~/docs ~/notes")
+            sys.exit(1)
 
     for dir_path in dirs:
         if not dir_path.is_dir():
@@ -1175,7 +1248,7 @@ def main():
         cmd_sources(cfg)
     elif cmd == "index":
         if sub_help:
-            print("Usage: kb index [DIR...] [--no-size-limit]")
+            print("Usage: kb index [DIR...] [--no-size-limit] [--include PATTERN ...]")
             sys.exit(0)
         cmd_index(cfg, args[1:])
     elif cmd == "search":

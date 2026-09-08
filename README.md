@@ -5,6 +5,9 @@
 
 CLI RAG tool for your docs. Index 30+ document formats (markdown, PDF, DOCX, EPUB, HTML, ODT, RTF, plain text, email, and more), hybrid search (semantic + keyword), ask questions and get sourced answers. Built on [sqlite-vec](https://github.com/asg017/sqlite-vec).
 
+> Originally forked from [`ariel-frischer/kb`](https://github.com/ariel-frischer/kb/), now an independently maintained hard fork.
+> See [Comparison with upstream](./docs/comparison-with-upstream.md) for a feature-by-feature comparison and guidance on which to choose.
+
 ## Features
 
 - **Hybrid search** — vector similarity + FTS5 keyword search, fused with Reciprocal Rank Fusion (with rank bonuses)

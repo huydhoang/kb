@@ -266,6 +266,16 @@ class TestSaveConfig:
         assert loaded.sources == ["notes/", "docs/"]
         assert loaded.max_chunk_chars == 3000
 
+    def test_include_patterns_roundtrip(self, tmp_path):
+        cfg = Config(include_patterns=["BZ*.md"])
+        assert Config().include_patterns == []
+        cfg.config_path = tmp_path / ".kb.toml"
+        cfg.config_dir = tmp_path
+        save_config(cfg)
+
+        loaded = _load_toml(cfg.config_path, "project")
+        assert loaded.include_patterns == ["BZ*.md"]
+
 
 class TestWindowsEncoding:
     def test_templates_are_ascii_only(self):

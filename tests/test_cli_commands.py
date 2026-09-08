@@ -209,6 +209,116 @@ class TestCmdIndex:
             cmd_index(cfg, [str(tmp_path / "nope")])
 
 
+class TestCmdIndexScoped:
+    def _project_cfg(self, tmp_path, **kwargs):
+        cfg = Config(embed_dims=4, max_chunk_chars=5000, min_chunk_chars=10)
+        cfg.scope = "project"
+        cfg.config_dir = tmp_path
+        cfg.config_path = tmp_path / ".kb.toml"
+        cfg.db_path = tmp_path / "kb.db"
+        for k, v in kwargs.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    def _client(self, n=10):
+        mock_client = _mock_openai_client(embed_dims=4)
+        mock_client.embeddings.create.return_value.data = [
+            MagicMock(embedding=[0.1] * 4) for _ in range(n)
+        ]
+        return mock_client
+
+    def _doc_paths(self, cfg):
+        conn = connect(cfg)
+        try:
+            return [r[0] for r in conn.execute("SELECT path FROM documents").fetchall()]
+        finally:
+            conn.close()
+
+    def test_scoped_index_persists_and_filters(self, tmp_path):
+        cfg = self._project_cfg(tmp_path, sources=["canonical"], include_patterns=[])
+        canonical = tmp_path / "canonical"
+        canonical.mkdir()
+        (canonical / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+        (canonical / "other.md").write_text("# Other\n\nExcluded content here yes.")
+
+        with patch("kb.ingest.OpenAI", return_value=self._client()):
+            cmd_index(cfg, [str(canonical), "--include", "BZ*.md"])
+
+        # Config persists the broader directory entry, never a glob
+        assert "canonical" in cfg.sources
+        assert cfg.include_patterns == ["BZ*.md"]
+        assert "include_patterns" in cfg.config_path.read_text()
+        # DB holds the BZ subset only
+        paths = self._doc_paths(cfg)
+        assert any("BZ001" in p for p in paths)
+        assert not any("other" in p for p in paths)
+
+    def test_scoped_index_merges_existing_sources(self, tmp_path):
+        cfg = self._project_cfg(tmp_path, sources=["docs"], include_patterns=[])
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "a.md").write_text("# A\n\nContent here is long enough.")
+        canonical = tmp_path / "canonical"
+        canonical.mkdir()
+        (canonical / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+
+        with patch("kb.ingest.OpenAI", return_value=self._client()):
+            cmd_index(cfg, [str(canonical), "--include", "BZ*.md"])
+
+        assert cfg.sources == ["docs", "canonical"]
+        assert cfg.include_patterns == ["BZ*.md"]
+
+    def test_scoped_index_without_dir_uses_config_sources(self, tmp_path):
+        cfg = self._project_cfg(tmp_path, sources=["canonical"], include_patterns=[])
+        canonical = tmp_path / "canonical"
+        canonical.mkdir()
+        (canonical / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+        (canonical / "other.md").write_text("# Other\n\nExcluded content here yes.")
+
+        with patch("kb.ingest.OpenAI", return_value=self._client()):
+            cmd_index(cfg, ["--include", "BZ*.md"])
+
+        assert cfg.sources == ["canonical"]
+        assert cfg.include_patterns == ["BZ*.md"]
+        paths = self._doc_paths(cfg)
+        assert any("BZ001" in p for p in paths)
+        assert not any("other" in p for p in paths)
+
+    def test_repeated_scoped_index_does_not_reembed(self, tmp_path, capsys):
+        cfg = self._project_cfg(tmp_path, sources=["canonical"], include_patterns=[])
+        canonical = tmp_path / "canonical"
+        canonical.mkdir()
+        (canonical / "BZ001.md").write_text("# BZ1\n\nIncluded content here yes.")
+
+        with patch("kb.ingest.OpenAI", return_value=self._client()):
+            cmd_index(cfg, [str(canonical), "--include", "BZ*.md"])
+        capsys.readouterr()
+
+        client2 = self._client()
+        with patch("kb.ingest.OpenAI", return_value=client2):
+            cmd_index(cfg, [str(canonical), "--include", "BZ*.md"])
+
+        client2.embeddings.create.assert_not_called()
+        assert "No changes" in capsys.readouterr().out
+
+    def test_changed_file_reprocessed(self, tmp_path):
+        cfg = self._project_cfg(tmp_path, sources=["canonical"], include_patterns=[])
+        canonical = tmp_path / "canonical"
+        canonical.mkdir()
+        target = canonical / "BZ001.md"
+        target.write_text("# BZ1\n\nOriginal content here yes indeed.")
+
+        with patch("kb.ingest.OpenAI", return_value=self._client()):
+            cmd_index(cfg, [str(canonical), "--include", "BZ*.md"])
+
+        target.write_text("# BZ1\n\nCompletely rewritten content here yes indeed.")
+        client2 = self._client()
+        with patch("kb.ingest.OpenAI", return_value=client2):
+            cmd_index(cfg, [str(canonical), "--include", "BZ*.md"])
+
+        assert client2.embeddings.create.called
+
+
 class TestCmdSearch:
     def test_no_db_exits(self, tmp_path):
         cfg = Config()

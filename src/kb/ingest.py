@@ -57,6 +57,16 @@ def _check_file_size(file_path: Path, cfg: Config, dir_path: Path) -> bool:
 _BUILTIN_EXCLUDES = {".kb"}
 
 
+def _matches_include(file_path: Path, dir_path: Path, patterns: list[str]) -> bool:
+    """Check if a file matches at least one include pattern.
+
+    Uses the same fnmatch semantics as _is_ignored: each pattern matches
+    against the relative path from the source directory and the filename.
+    """
+    rel = str(file_path.relative_to(dir_path))
+    return any(fnmatch(rel, pat) or fnmatch(file_path.name, pat) for pat in patterns)
+
+
 def _is_ignored(file_path: Path, dir_path: Path, patterns: list[str]) -> bool:
     """Check if a file matches any ignore pattern."""
     rel = str(file_path.relative_to(dir_path))
@@ -217,9 +227,22 @@ def index_directory(dir_path: Path, cfg: Config, *, no_size_limit: bool = False)
     all_files = sorted(
         f for f in dir_path.rglob("*") if f.is_file() and f.suffix.lower() in exts
     )
-    files = [f for f in all_files if not _is_ignored(f, dir_path, ignore_patterns)]
+    if cfg.include_patterns:
+        included = [
+            f for f in all_files if _matches_include(f, dir_path, cfg.include_patterns)
+        ]
+        include_skipped = len(all_files) - len(included)
+    else:
+        included = all_files
+        include_skipped = 0
+    files = [f for f in included if not _is_ignored(f, dir_path, ignore_patterns)]
 
-    ignored_count = len(all_files) - len(files)
+    ignored_count = len(included) - len(files)
+    if include_skipped:
+        print(
+            f"  {style('Skipped', 'warning')} {style(include_skipped, 'metric')} "
+            "files via include filter"
+        )
     if ignored_count:
         print(
             f"  {style('Ignored', 'warning')} {style(ignored_count, 'metric')} "

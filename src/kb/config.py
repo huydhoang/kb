@@ -73,6 +73,7 @@ sources = [
 
 # Format options
 # index_code = false                # also index source code files (.py, .js, .ts, etc.)
+# include_patterns = ["BZ*.md"]     # only index files matching these globs (empty = all files)
 
 # Size guard
 # max_file_size_mb = 10             # skip files larger than this during indexing
@@ -117,6 +118,7 @@ sources = [
 
 # Format options
 # index_code = false                # also index source code files (.py, .js, .ts, etc.)
+# include_patterns = ["BZ*.md"]     # only index files matching these globs (empty = all files)
 
 # Size guard
 # max_file_size_mb = 10             # skip files larger than this during indexing
@@ -147,6 +149,7 @@ class Config:
     max_file_size_mb: float = 10
     allowed_large_files: list[str] = field(default_factory=list)
     index_code: bool = False
+    include_patterns: list[str] = field(default_factory=list)
     rerank_method: str = "llm"  # "llm" (RankGPT) or "cross-encoder"
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     hyde_enabled: bool = True  # generate hypothetical doc before vector search
