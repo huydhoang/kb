@@ -257,15 +257,40 @@ def _parse_dotenv_file(path: Path) -> dict[str, str]:
     return data
 
 
-def load_secrets() -> None:
+def load_secrets(dotenv_path: Path | None = None) -> Path | None:
     """Load API keys into env vars from project `.env` and secrets.toml.
 
-    Precedence: process env > project `.env` (walk-up from cwd) >
-    `~/.config/kb/secrets.toml`. Existing env vars are never overwritten,
-    so `secrets.toml` remains optional when `.env` (or the environment)
-    already provides the keys.
+    Explicitly called at CLI startup (see ``cli.main``) so ``kb`` picks up
+    the project's ``.env`` even when launched from subprocesses/agent shells
+    that do not load ``.env`` themselves. Also called by the MCP server via
+    ``_get_config``, so ``kb search`` and ``kb ask`` behave identically.
+
+    Precedence: process env > project `.env` (walk-up from cwd to the
+    project/environment root) > `~/.config/kb/secrets.toml`. Existing env
+    vars are never overwritten (``override=False``), so `secrets.toml`
+    remains optional when `.env` (or the environment) already provides
+    the keys. Never prints values; returns the loaded `.env` path (or
+    ``None``) without exposing secrets.
     """
-    merged: dict[str, str] = {}
+    resolved = dotenv_path if dotenv_path is not None else _find_dotenv()
+    if resolved is not None and resolved.is_file():
+        try:
+            from dotenv import load_dotenv
+
+            # override=False: explicitly exported vars win over .env.
+            # Never log/print values here.
+            load_dotenv(resolved, override=False, encoding="utf-8")
+        except ImportError:
+            # Fallback when python-dotenv is unavailable (e.g. minimal env).
+            for key, value in _parse_dotenv_file(resolved).items():
+                if key not in os.environ:
+                    os.environ[key] = value
+        except UnicodeDecodeError as e:
+            raise ConfigError(
+                f"Env file {resolved} is not valid UTF-8 ({e}). "
+                "Convert it to UTF-8 and retry."
+            ) from e
+
     if SECRETS_PATH.is_file():
         try:
             with open(SECRETS_PATH, "rb") as f:
@@ -280,16 +305,11 @@ def load_secrets() -> None:
                 f"Secrets file {SECRETS_PATH} is not valid TOML: {e}"
             ) from e
         for key, value in secrets_data.items():
-            merged[key.upper()] = str(value)
+            env_key = key.upper()
+            if env_key not in os.environ:
+                os.environ[env_key] = str(value)
 
-    dotenv_path = _find_dotenv()
-    if dotenv_path is not None:
-        for key, value in _parse_dotenv_file(dotenv_path).items():
-            merged[key] = value
-
-    for env_key, value in merged.items():
-        if env_key not in os.environ:
-            os.environ[env_key] = value
+    return resolved if resolved is not None and resolved.is_file() else None
 
 
 def _project_db_path(config_dir: Path) -> Path:

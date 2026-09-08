@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "sqlite-vec",
     "openai",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

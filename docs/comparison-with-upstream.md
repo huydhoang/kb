@@ -17,7 +17,7 @@ with no expectation of merging back upstream.
 
 | Area | Upstream `ariel-frischer/kb` | This fork |
 |---|---|---|
-| Secrets | `OPENAI_API_KEY` / `OPENAI_BASE_URL` from process env or `~/.config/kb/secrets.toml` (env wins) | Same, plus project `.env` (walk-up from cwd). Precedence: process env > project `.env` > `secrets.toml`, so `secrets.toml` is optional |
+| Secrets | `OPENAI_API_KEY` / `OPENAI_BASE_URL` from process env or `~/.config/kb/secrets.toml` (env wins) | Same, plus project `.env` autoloaded at CLI startup via `python-dotenv` (walk-up from cwd, works from subprocess/agent shells). Precedence: process env > project `.env` > `secrets.toml` (`override=False`, never prints/exposes values), so `secrets.toml` is optional |
 | Index scoping | `sources` are directories only; exclusion via `.kbignore` only | Same directory-only `sources`, plus `include_patterns` whitelist (`Config`, `.kb.toml`) and persistent `kb index <dir> --include "PAT"` scoped indexing. `.kbignore` always wins over includes |
 | `kb index DIR` without flags | One-off index of the given dirs, config untouched | Unchanged |
 | `kb index --include` | Not present | Persistent: merges dirs into `sources` (never drops existing entries) and patterns into `include_patterns` (union), saves `.kb.toml`, then indexes the requested scope |
@@ -34,10 +34,17 @@ with no expectation of merging back upstream.
 
 ### Project `.env` support
 
-`load_secrets()` (`src/kb/config.py`) additionally looks for a project `.env`
-by walking up from the cwd (same convention as `.kb.toml` discovery) and parses
-it without new dependencies (blank lines, `#` comments, `export` prefix,
-single/double quotes). Use it for per-project `OPENAI_API_KEY` /
+`load_secrets()` (`src/kb/config.py`) explicitly loads the project's `.env`
+at CLI startup (`cli.main`; MCP server via `_get_config`, so `kb search` and
+`kb ask` behave identically), even when launched from subprocesses/agent
+shells that do not load `.env` themselves. Discovery walks up from the cwd
+(same convention as `.kb.toml` discovery) to the project/environment root and
+parses with `python-dotenv` (`load_dotenv(..., override=False)`), so
+explicitly exported vars are never overwritten. Precedence: process env >
+project `.env` > `~/.config/kb/secrets.toml`. Values are never printed and
+never exposed in JSON output, diagnostics, errors, or logs (covered by
+`tests/test_dotenv_autoload.py`, including a subprocess test without a
+parent-exported `OPENAI_API_KEY`). Use it for per-project `OPENAI_API_KEY` /
 `OPENAI_BASE_URL` (e.g. LMStudio at `http://localhost:1234/v1`).
 
 ### Include-filter scoped indexing

@@ -50,7 +50,7 @@ uv tool install "kb[local-llm] @ git+https://github.com/huydhoang/kb.git" # + lo
 
 **Runs fully local — no API keys required.** Set `embed_method = "local"` in config (see [Configuration](#configuration)) and use local backends for HyDE (`hyde_method = "local"`), reranking (`rerank_method = "cross-encoder"`), and query expansion (`expand_method = "local"`). Only `kb ask` needs an LLM for the final answer — point it at a local model via Ollama or similar.
 
-For cloud, the defaults work with any OpenAI-compatible API. Set `OPENAI_API_KEY` in your environment (or in `~/.config/kb/secrets.toml`). Recommended cloud models: `text-embedding-3-small` for embeddings, `gpt-4o-mini` for chat/ask. Works with any provider that speaks the OpenAI API — set `OPENAI_BASE_URL` to point at Ollama, LiteLLM, vLLM, etc.
+For cloud, the defaults work with any OpenAI-compatible API. `kb` loads `OPENAI_API_KEY` / `OPENAI_BASE_URL` at CLI startup from the project's `.env` (walk-up from cwd, via `python-dotenv`, `override=False`) so subprocess/agent shells that don't load `.env` themselves still work — or from `~/.config/kb/secrets.toml`. Precedence: process env > project `.env` > `secrets.toml`. Explicitly exported vars are never overwritten, and values are never printed or included in JSON/diagnostics/errors/logs. Recommended cloud models: `text-embedding-3-small` for embeddings, `gpt-4o-mini` for chat/ask. Works with any provider that speaks the OpenAI API — set `OPENAI_BASE_URL` to point at Ollama, LiteLLM, vLLM, etc.
 
 ## Quickstart
 
@@ -185,7 +185,9 @@ CHANGELOG.md
 
 See [docs/kbignore.md](docs/kbignore.md) for common patterns by use case.
 
-### secrets.toml
+### secrets.toml and project `.env`
+
+`kb` explicitly loads the project's `.env` at CLI startup (`load_secrets()` in `cli.main`, also via the MCP server's `_get_config`), so `kb search` and `kb ask` behave identically even when launched from subprocesses/agent shells that do not load `.env` themselves.
 
 Optionally store secrets in `~/.config/kb/secrets.toml` instead of environment variables:
 
@@ -196,7 +198,17 @@ openai_api_key = "sk-..."
 # openai_api_key = "unused"
 ```
 
-Keys are loaded as uppercase environment variables. Existing env vars take precedence.
+Keys are loaded as uppercase environment variables. Existing env vars take precedence and are never overwritten (`override=False`).
+
+Per-project keys belong in `<project>/.env` (found by walking up from cwd, same convention as `.kb.toml` discovery; parsed with `python-dotenv`):
+
+```bash
+# <project>/.env
+OPENAI_API_KEY="sk-..."
+# OPENAI_BASE_URL="http://localhost:1234/v1"  # Ollama / LiteLLM / vLLM, etc.
+```
+
+Precedence: process env > project `.env` > `secrets.toml`. Values are never printed or exposed in JSON output, diagnostics, errors, or logs.
 
 ## Search Filters
 

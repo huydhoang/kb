@@ -1151,6 +1151,9 @@ complete -F _kb kb"""
 
 
 def main():
+    # Explicit project .env autoload for subprocess/agent shells that do not
+    # load .env themselves. Applies equally to `kb search` and `kb ask`
+    # (both dispatch below after this call). Never prints secret values.
     try:
         load_secrets()
     except ConfigError as e:
