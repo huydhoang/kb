@@ -5,8 +5,8 @@ This repo (`huydhoang/kb`) is an independently maintained hard fork of
 The core storage engine (chunking, sqlite-vec storage, reranking, `kb ask` RAG
 pipeline) is shared; `kb search` intentionally diverges (see below).
 The differences below are verified against upstream `main`
-(`src/kb/api.py`, `src/kb/cli.py`, `src/kb/config.py`, `src/kb/extract.py`,
-`src/kb/ingest.py`, `README.md`).
+(`src/kb/api.py`, `src/kb/cli.py`, `src/kb/config.py`, `src/kb/embed.py`,
+`src/kb/extract.py`, `src/kb/ingest.py`, `src/kb/terminal.py`, `README.md`).
 
 Upstream's own maintenance note reads: *"This is a personal tool I've
 open-sourced. I may or may not respond to issues/PRs. Fork freely."*
@@ -24,6 +24,8 @@ with no expectation of merging back upstream.
 | Incremental indexing | MD5 per file/chunk; unchanged skipped, changed reprocessed | Unchanged; include-excluded files are filtered before extract/hash/embed, and re-running a scope does not re-embed unchanged files |
 | Windows config encoding | Bare TOML load (fails opaquely on ANSI-encoded files) | `ConfigError` with UTF-8 guidance for `.kb.toml` / `secrets.toml` / `.env` |
 | Text ingestion encoding | Platform-default decoding (CJK mojibake on Windows, e.g. `å`, `ç`) | Explicit UTF-8 (`encoding="utf-8"`) for Markdown/text/HTML/SRT/RTF extractors; no `latin-1` repair hack; Unicode preserved to SQLite/FTS/output |
+| Console output encoding | Platform-default stdout/stderr (CJK `UnicodeEncodeError` on Windows terminals) | CLI startup reconfigures stdout/stderr to UTF-8 via `reconfigure(encoding="utf-8", errors="replace")` when supported (`ensure_utf8_stdio()`); no locale or code-page changes; search text and `ensure_ascii=False` JSON untouched |
+| Local OpenAI-compatible endpoint | API key required even for localhost servers | `openai_base_url` config (`Config`, `.kb.toml`); `localhost`/`127.0.0.1` endpoints work without an API key (harmless internal dummy key, never printed); honored by `search`, `ask`, and `index` |
 | `kb search` lifecycle | HyDE + optional query expansion before retrieval (chat-model dependent) | Pure retrieval: query embedding → vector + FTS → RRF fusion. Never calls chat/HyDE/expansion; a chat-model outage has zero effect. `kb ask` keeps the full RAG pipeline |
 | `kb search` default output | Human-readable + `--json` opt-in full metadata | Bare compact JSON `[{"text", "score", "path"}]` by default (`--json` alias, `ensure_ascii=False`); `--print` for human-readable; `--csv`/`--md` kept; diagnostics go to stderr so stdout stays parseable |
 | `score` semantics | `similarity` + `rrf_score` + internals exposed | `score` = cosine similarity (`1 - cosine distance`), normalized-BM25 fallback for FTS-only matches; `rrf_score` stays an internal ranking concern |
@@ -77,6 +79,28 @@ likewise). Source files need no changes. Databases built before the fix still
 contain mojibake — rebuild once with `kb reset` + `kb index`; incremental
 indexing (skip unchanged, re-embed changed) is unchanged.
 
+### UTF-8 stdout/stderr at startup
+
+`ensure_utf8_stdio()` (`src/kb/terminal.py`), called first in `cli.main`,
+reconfigures `sys.stdout`/`sys.stderr` to UTF-8 (`errors="replace"`) whenever
+`reconfigure` is available, so `kb search` can emit Chinese/Japanese/etc.
+from agent shells and Windows terminals without `UnicodeEncodeError`.
+Rules: reconfigure-only — no locale or system code-page changes; search
+result text and `ensure_ascii=False` JSON encoding unchanged; silently
+no-ops on platforms/streams where `reconfigure` is unavailable (covered by
+`tests/test_unicode_stdio.py`, including a simulated non-UTF-8 stdout).
+
+### Local `openai_base_url` without API key
+
+Set `openai_base_url = "http://localhost:1234/v1"` in `.kb.toml` to point
+embeddings/chat at a local OpenAI-compatible server (e.g. LM Studio).
+`openai_client_kwargs()` (`src/kb/embed.py`) passes `base_url` through, and
+for loopback hosts (`localhost`, `127.0.0.1`) supplies a harmless internal
+dummy key only when `OPENAI_API_KEY` is unset, since the OpenAI SDK insists
+on one — the value is never printed or exposed. Remote custom base URLs keep
+the normal API-key requirement. Applies to `kb search`, `kb ask`, and
+`kb index` (covered by `tests/test_embed.py`).
+
 ### `kb search`: pure retrieval + compact contract
 
 ```bash
@@ -94,8 +118,9 @@ relevance value, not `rrf_score`. Top-k applies to both output modes.
 
 - **Upstream** — you want the original author's line, minimal surface, and are
   fine with env/`secrets.toml` secrets and exclude-only indexing.
-- **This fork** — you want project-local `.env` secrets, incremental
-  include-filtered indexing of large trees, CJK-safe UTF-8 ingestion, and fast
+- **This fork** — you want project-local `.env` secrets, keyless local
+  OpenAI-compatible endpoints, incremental include-filtered indexing of large
+  trees, CJK-safe UTF-8 ingestion and console output, and fast
   deterministic `kb search` (compact JSON, no LLM), and accept tracking this
   fork instead of upstream.
 

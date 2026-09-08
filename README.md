@@ -142,6 +142,7 @@ sources = [
 # embed_method = "openai"  # "openai" (API) or "local" (sentence-transformers, no API cost)
 # embed_model = "text-embedding-3-small"
 # embed_dims = 1536
+# openai_base_url = "http://localhost:1234/v1"  # local OpenAI-compatible server (no API key needed for localhost/127.0.0.1)
 # local_embed_model = "ibm-granite/granite-embedding-english-r2"  # or "Snowflake/snowflake-arctic-embed-m-v1.5"
 # chat_model = "gpt-4o-mini"
 # max_chunk_chars = 2000
@@ -209,6 +210,8 @@ OPENAI_API_KEY="sk-..."
 ```
 
 Precedence: process env > project `.env` > `secrets.toml`. Values are never printed or exposed in JSON output, diagnostics, errors, or logs.
+
+For a local OpenAI-compatible server (e.g. LM Studio), set `openai_base_url = "http://localhost:1234/v1"` in `.kb.toml` instead — no API key is required for `localhost`/`127.0.0.1` endpoints (`search`, `ask`, and `index` all honor it).
 
 ## Search Filters
 
@@ -318,6 +321,11 @@ kb ask "question"
 
 Note: databases indexed before the UTF-8 fix contain mojibake — rebuild with
 `kb reset` + `kb index` (incremental indexing behavior is unchanged).
+CLI startup also reconfigures stdout/stderr to UTF-8 via
+`reconfigure(encoding="utf-8", errors="replace")` when supported
+(`ensure_utf8_stdio()`), so CJK search output works from Windows terminals
+and agent shells. Reconfigure-only: no locale or system code-page changes;
+search text and `ensure_ascii=False` JSON output are untouched.
 
 ## MCP Server
 
