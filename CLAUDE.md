@@ -23,7 +23,7 @@ make check                    # lint + format check + tests (CI equivalent)
 
 ```bash
 uv tool install "kb[all] @ /home/ari/repos/kb" --force   # install as `kb` command from local
-uv tool install "kb[all] @ git+https://github.com/ariel-frischer/kb.git"  # install from git
+uv tool install "kb[all] @ git+https://github.com/huydhoang/kb.git"  # install from git
 ```
 
 ## Scope Model
