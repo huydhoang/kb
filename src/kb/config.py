@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PROJECT_CONFIG_FILE = ".kb.toml"
+PROJECT_DOTENV_FILE = ".env"
 SECRETS_PATH = Path.home() / ".config" / "kb" / "secrets.toml"
 SCHEMA_VERSION = 9
 
@@ -193,27 +194,99 @@ class Config:
             return str(file_path)
 
 
-def load_secrets() -> None:
-    """Load API keys from ~/.config/kb/secrets.toml into env vars.
+def _find_dotenv(start: Path | None = None) -> Path | None:
+    """Walk up from start (default cwd) looking for a project `.env` file."""
+    base = start or Path.cwd()
+    for parent in [base, *base.parents]:
+        candidate = parent / PROJECT_DOTENV_FILE
+        if candidate.is_file():
+            return candidate
+        if parent == parent.parent:
+            break
+    return None
 
-    Existing env vars take precedence (never overwrite).
+
+def _parse_dotenv_file(path: Path) -> dict[str, str]:
+    """Parse a dotenv file into {KEY: value} without touching os.environ.
+
+    Supports blank lines, `#` comments, optional `export ` prefix,
+    and single/double-quoted values. Invalid lines without `=` are ignored.
     """
-    if not SECRETS_PATH.is_file():
-        return
     try:
-        with open(SECRETS_PATH, "rb") as f:
-            data = tomllib.load(f)
+        text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
         raise ConfigError(
-            f"Secrets file {SECRETS_PATH} is not valid UTF-8 ({e}). "
-            "Convert it to UTF-8 (e.g. re-save with UTF-8 encoding) and retry."
+            f"Env file {path} is not valid UTF-8 ({e}). Convert it to UTF-8 and retry."
         ) from e
-    except tomllib.TOMLDecodeError as e:
-        raise ConfigError(f"Secrets file {SECRETS_PATH} is not valid TOML: {e}") from e
-    for key, value in data.items():
-        env_key = key.upper()
+    data: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            quote = value[0]
+            inner = value[1:-1]
+            if quote == '"':
+                # Unescape \\ first via placeholder so `\"` from `\\` isn't reprocessed.
+                inner = inner.replace("\\\\", "\x00")
+                inner = (
+                    inner.replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t")
+                    .replace('\\"', '"')
+                )
+                inner = inner.replace("\x00", "\\")
+            value = inner
+        else:
+            # Strip trailing ` # comment` from unquoted values only.
+            if " #" in value:
+                value = value.split(" #", 1)[0].rstrip()
+        data[key] = value
+    return data
+
+
+def load_secrets() -> None:
+    """Load API keys into env vars from project `.env` and secrets.toml.
+
+    Precedence: process env > project `.env` (walk-up from cwd) >
+    `~/.config/kb/secrets.toml`. Existing env vars are never overwritten,
+    so `secrets.toml` remains optional when `.env` (or the environment)
+    already provides the keys.
+    """
+    merged: dict[str, str] = {}
+    if SECRETS_PATH.is_file():
+        try:
+            with open(SECRETS_PATH, "rb") as f:
+                secrets_data = tomllib.load(f)
+        except UnicodeDecodeError as e:
+            raise ConfigError(
+                f"Secrets file {SECRETS_PATH} is not valid UTF-8 ({e}). "
+                "Convert it to UTF-8 (e.g. re-save with UTF-8 encoding) and retry."
+            ) from e
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(
+                f"Secrets file {SECRETS_PATH} is not valid TOML: {e}"
+            ) from e
+        for key, value in secrets_data.items():
+            merged[key.upper()] = str(value)
+
+    dotenv_path = _find_dotenv()
+    if dotenv_path is not None:
+        for key, value in _parse_dotenv_file(dotenv_path).items():
+            merged[key] = value
+
+    for env_key, value in merged.items():
         if env_key not in os.environ:
-            os.environ[env_key] = str(value)
+            os.environ[env_key] = value
 
 
 def _project_db_path(config_dir: Path) -> Path:
