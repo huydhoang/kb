@@ -19,7 +19,7 @@ from .terminal import label, style
 
 
 def md5_hash(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
 def _load_ignore_patterns(dir_path: Path) -> list[str]:
@@ -27,7 +27,9 @@ def _load_ignore_patterns(dir_path: Path) -> list[str]:
     patterns = []
     for kbignore in [dir_path / ".kbignore", dir_path.parent / ".kbignore"]:
         if kbignore.is_file():
-            for line in kbignore.read_text().splitlines():
+            for line in kbignore.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
                 line = line.strip()
                 if line and not line.startswith("#"):
                     patterns.append(line)

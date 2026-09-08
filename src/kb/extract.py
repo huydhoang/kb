@@ -59,7 +59,12 @@ except ImportError:
 
 
 def _read_text(path: Path) -> str:
-    return path.read_text(errors="replace")
+    # Explicit UTF-8: source Markdown/text files are valid UTF-8.
+    # Never rely on the platform/default locale encoding (e.g. cp1252 on
+    # Windows) which produces mojibake for CJK text.
+    # NOTE: existing DBs built before this fix contain mojibake and must be
+    # rebuilt via `kb reset` + `kb index` (incremental indexing is preserved).
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 class _HTMLStripper(HTMLParser):
@@ -95,13 +100,13 @@ def _strip_html(html: str) -> str:
 
 
 def _extract_html(path: Path) -> str:
-    return _strip_html(path.read_text(errors="replace"))
+    return _strip_html(path.read_text(encoding="utf-8", errors="replace"))
 
 
 def _extract_srt(path: Path) -> str:
     """Extract text from SRT/VTT subtitle files, stripping sequence numbers and timestamps."""
     lines = []
-    for line in path.read_text(errors="replace").splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         # skip blank, sequence numbers, timestamps, VTT header
         if not line:
@@ -259,7 +264,7 @@ def _extract_rtf(path: Path) -> str:
     """Extract text from .rtf using striprtf."""
     from striprtf.striprtf import rtf_to_text
 
-    return rtf_to_text(path.read_text(errors="replace"))
+    return rtf_to_text(path.read_text(encoding="utf-8", errors="replace"))
 
 
 # ---------------------------------------------------------------------------

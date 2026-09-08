@@ -47,10 +47,11 @@ def kb_search(
     threshold: float | None = None,
     expand: bool = False,
 ) -> dict:
-    """Hybrid semantic + keyword search over the knowledge base.
+    """Pure retrieval hybrid semantic + keyword search (no LLM, no HyDE).
 
-    Uses HyDE (Hypothetical Document Embeddings) by default: generates a hypothetical
-    answer passage via LLM, embeds that for vector search. FTS uses original query.
+    Fast deterministic retrieval: query embedding → vector search → FTS →
+    RRF fusion. Never calls the chat model. ``expand`` is accepted for
+    backward compatibility but ignored (search is retrieval-only).
 
     Supports inline filters in the query string:
       file:glob, type:name, tag:name, dt>"date", dt<"date", +"must", -"exclude"
@@ -59,7 +60,7 @@ def kb_search(
         query: Search query (may include inline filters).
         top_k: Number of results to return.
         threshold: Minimum similarity score (0-1). Omit to use config default.
-        expand: Enable query expansion (keyword synonyms + semantic rephrasings).
+        expand: Ignored (kept for backward compat; search uses no LLM).
     """
     try:
         cfg = _with_expand(_get_config(), expand)

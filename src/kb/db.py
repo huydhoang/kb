@@ -1,6 +1,7 @@
 """Database schema and connection management."""
 
 import sqlite3
+import sys
 from pathlib import Path
 
 import sqlite_vec
@@ -41,16 +42,19 @@ def connect(cfg: Config) -> sqlite3.Connection:
         if current == 8:
             # Vec0 used L2 distance — switch to cosine. Must drop+recreate vec_chunks.
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, switching vec0 to cosine distance..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, switching vec0 to cosine distance...",
+                file=sys.stderr,
             )
             conn.execute("DROP TABLE IF EXISTS vec_chunks")
             print(
-                "  Dropped vec_chunks (L2). Run 'kb index' to reindex with cosine distance."
+                "  Dropped vec_chunks (L2). Run 'kb index' to reindex with cosine distance.",
+                file=sys.stderr,
             )
         elif current == 7:
             # Non-destructive: add fts_path to chunks, rebuild FTS using truncated paths
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, truncating FTS paths..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, truncating FTS paths...",
+                file=sys.stderr,
             )
             for trigger in ("fts_ai", "fts_ad", "fts_au"):
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
@@ -70,7 +74,8 @@ def connect(cfg: Config) -> sqlite3.Connection:
         elif current == 6:
             # Non-destructive: add doc_path + fts_path to chunks, rebuild FTS
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, adding doc_path to FTS..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, adding doc_path to FTS...",
+                file=sys.stderr,
             )
             for trigger in ("fts_ai", "fts_ad", "fts_au"):
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
@@ -97,7 +102,8 @@ def connect(cfg: Config) -> sqlite3.Connection:
         elif current == 5:
             # Non-destructive: rebuild FTS with porter tokenizer + doc_path + fts_path
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, rebuilding FTS with porter tokenizer..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, rebuilding FTS with porter tokenizer...",
+                file=sys.stderr,
             )
             for trigger in ("fts_ai", "fts_ad", "fts_au"):
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
@@ -124,7 +130,8 @@ def connect(cfg: Config) -> sqlite3.Connection:
         elif current == 4:
             # Non-destructive: rebuild FTS with triggers + porter tokenizer + fts_path
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, rebuilding FTS with triggers..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, rebuilding FTS with triggers...",
+                file=sys.stderr,
             )
             for trigger in ("fts_ai", "fts_ad", "fts_au"):
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
@@ -151,7 +158,8 @@ def connect(cfg: Config) -> sqlite3.Connection:
         elif current == 3:
             # Non-destructive migration: add tags column + doc_path + fts_path, rebuild FTS
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, adding tags column + FTS triggers..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, adding tags column + FTS triggers...",
+                file=sys.stderr,
             )
             for trigger in ("fts_ai", "fts_ad", "fts_au"):
                 conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
@@ -181,7 +189,8 @@ def connect(cfg: Config) -> sqlite3.Connection:
             needs_fts_rebuild = True
         else:
             print(
-                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, rebuilding tables..."
+                f"Schema upgrade v{current} -> v{SCHEMA_VERSION}, rebuilding tables...",
+                file=sys.stderr,
             )
             for table in ["vec_chunks", "fts_chunks", "chunks", "documents"]:
                 conn.execute(f"DROP TABLE IF EXISTS {table}")

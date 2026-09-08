@@ -26,7 +26,7 @@ from .filters import (
     parse_filters,
     remove_tag_filter,
 )
-from .hyde import generate_hyde_passage, generate_hyde_passage_with_usage
+from .hyde import generate_hyde_passage_with_usage
 from .rerank import rerank
 from .search import (
     fill_fts_only_results,
@@ -199,6 +199,13 @@ def search_core(
     top_k: int = 5,
     threshold: float | None = None,
 ) -> dict:
+    """Pure retrieval: query embedding → vector search → FTS → RRF fusion.
+
+    Never invokes the chat model, HyDE, query expansion, or answer
+    generation. Only the embedding backend is used (OpenAI embeddings or
+    local sentence-transformers depending on ``cfg.embed_method``).
+    ``kb ask`` retains the full RAG pipeline; ``kb search`` is retrieval only.
+    """
     if threshold is not None:
         cfg = copy(cfg)
         cfg.search_threshold = threshold
@@ -206,17 +213,10 @@ def search_core(
     _require_index(cfg)
 
     conn = connect(cfg)
-    client = OpenAI()
+    client = OpenAI() if cfg.embed_method != "local" else None
 
     clean_query, filters = parse_filters(query)
     has_filters = has_active_filters(filters)
-
-    hyde_passage = None
-    hyde_ms = 0.0
-    expand_ms = 0.0
-    expansions: list[dict] = []
-    if cfg.hyde_enabled:
-        hyde_passage, hyde_ms = generate_hyde_passage(clean_query, client, cfg)
 
     has_threshold = cfg.search_threshold > 0
     retrieve_k = (top_k * 5) if has_filters else (top_k * 3)
@@ -227,104 +227,35 @@ def search_core(
         tagged_chunk_ids = get_tagged_chunk_ids(filters, conn)
         retrieve_k = max(retrieve_k, len(tagged_chunk_ids) + top_k)
 
-    if cfg.query_expand:
-        expansions, expand_ms = expand_query(client, clean_query, cfg)
-        lex_exps = [e for e in expansions if e["type"] == "lex"]
-        vec_exps = [e for e in expansions if e["type"] == "vec"]
-
-        # Best-of-two vec: embed query + HyDE, pick better result set
-        t0 = time.time()
-        primary_vec, embed_ms = _pick_best_vec(
-            conn,
-            client,
-            clean_query,
-            hyde_passage,
-            retrieve_k,
-            cfg,
-            tagged_ids=tagged_chunk_ids,
+    # Pure retrieval: embed the raw query only (no HyDE, no expansion).
+    t0 = time.time()
+    embeddings = embed_batch(client, [clean_query], cfg, is_query=True)
+    embed_ms = (time.time() - t0) * 1000
+    t0 = time.time()
+    if tagged_chunk_ids is not None:
+        vec_results = run_vec_query_filtered(
+            conn, serialize_f32(embeddings[0]), tagged_chunk_ids
         )
-
-        # Batch embed vec expansions (separate call)
-        if vec_exps:
-            exp_embeddings = embed_batch(
-                client, [e["text"] for e in vec_exps], cfg, is_query=True
-            )
-            embed_ms += (time.time() - t0) * 1000 - embed_ms
-            if tagged_chunk_ids is not None:
-                exp_vec = [
-                    run_vec_query_filtered(conn, serialize_f32(emb), tagged_chunk_ids)
-                    for emb in exp_embeddings
-                ]
-            else:
-                exp_vec = [
-                    run_vec_query(conn, serialize_f32(emb), retrieve_k)
-                    for emb in exp_embeddings
-                ]
-        else:
-            exp_vec = []
-
-        t0 = time.time()
-        vec_ms = (time.time() - t0) * 1000
-
-        t0 = time.time()
-        if tagged_chunk_ids is not None:
-            primary_fts = run_fts_query_filtered(
-                conn, clean_query, retrieve_k, tagged_chunk_ids
-            )
-            exp_fts = [
-                run_fts_query_filtered(conn, e["text"], retrieve_k, tagged_chunk_ids)
-                for e in lex_exps
-            ]
-        else:
-            primary_fts = run_fts_query(conn, clean_query, retrieve_k)
-            exp_fts = [run_fts_query(conn, e["text"], retrieve_k) for e in lex_exps]
-        fts_ms = (time.time() - t0) * 1000
-
-        # Normalize and fuse all lists
-        all_lists = [
-            normalize_vec_list(primary_vec),
-            normalize_fts_list(primary_fts),
-        ]
-        all_lists += [normalize_vec_list(r) for r in exp_vec]
-        all_lists += [normalize_fts_list(r) for r in exp_fts]
-        weights = [2.0, 2.0] + [1.0] * (len(all_lists) - 2)
-
-        fuse_k = retrieve_k if has_filters else top_k
-        results = multi_rrf_fuse(all_lists, weights, fuse_k, cfg.rrf_k)
-        fill_fts_only_results(conn, results)
-        fused_count = len(results)
-
-        vec_count = len(primary_vec)
-        fts_count = len(primary_fts)
     else:
-        t0 = time.time()
-        vec_results, embed_ms = _pick_best_vec(
-            conn,
-            client,
-            clean_query,
-            hyde_passage,
-            retrieve_k,
-            cfg,
-            tagged_ids=tagged_chunk_ids,
+        vec_results = run_vec_query(conn, serialize_f32(embeddings[0]), retrieve_k)
+    vec_ms = (time.time() - t0) * 1000
+
+    t0 = time.time()
+    if tagged_chunk_ids is not None:
+        fts_results = run_fts_query_filtered(
+            conn, clean_query, retrieve_k, tagged_chunk_ids
         )
-        vec_ms = (time.time() - t0) * 1000 - embed_ms
+    else:
+        fts_results = run_fts_query(conn, clean_query, retrieve_k)
+    fts_ms = (time.time() - t0) * 1000
 
-        t0 = time.time()
-        if tagged_chunk_ids is not None:
-            fts_results = run_fts_query_filtered(
-                conn, clean_query, retrieve_k, tagged_chunk_ids
-            )
-        else:
-            fts_results = run_fts_query(conn, clean_query, retrieve_k)
-        fts_ms = (time.time() - t0) * 1000
+    fuse_k = retrieve_k if has_filters else top_k
+    results = rrf_fuse(vec_results, fts_results, fuse_k, cfg)
+    fill_fts_only_results(conn, results)
+    fused_count = len(results)
 
-        fuse_k = retrieve_k if has_filters else top_k
-        results = rrf_fuse(vec_results, fts_results, fuse_k, cfg)
-        fill_fts_only_results(conn, results)
-        fused_count = len(results)
-
-        vec_count = len(vec_results)
-        fts_count = len(fts_results)
+    vec_count = len(vec_results)
+    fts_count = len(fts_results)
 
     # Skip tag in post-filters since it was handled pre-fusion
     post_filters = (
@@ -345,13 +276,10 @@ def search_core(
     conn.close()
 
     timing = {
-        "hyde": round(hyde_ms),
         "embed": round(embed_ms),
         "vec": round(vec_ms),
         "fts": round(fts_ms),
     }
-    if cfg.query_expand:
-        timing["expand"] = round(expand_ms)
 
     out: dict = {
         "query": clean_query,
@@ -377,10 +305,46 @@ def search_core(
             for i, r in enumerate(results)
         ],
     }
-    if cfg.query_expand:
-        out["expanded"] = bool(expansions)
-        out["expansions"] = expansions
     return out
+
+
+def to_compact_results(search_result: dict) -> list[dict]:
+    """Adapt internal ``search_core`` output to the public Semble-compatible shape.
+
+    Public contract (default ``kb search`` output):
+    ``[{"text": str, "score": float, "path": str}, ...]`` — bare JSON list,
+    token-efficient, no diagnostics, no model/RRF internals.
+
+    ``score`` semantics:
+    - cosine similarity (``1 - cosine distance``) when the chunk was
+      vector-matched. Higher means more semantically similar; typically in
+      ``[0, 1]`` for normalized embeddings (may be slightly negative for
+      unrelated content, range ``[-1, 1]``).
+    - normalized BM25 ``|rank| / (1 + |rank|)`` in ``(0, 1)`` for FTS-only
+      matches (no vector similarity available).
+    Ranking/order is determined internally by RRF fusion; ``score`` is the
+    intuitive relevance value, not the internal ``rrf_score``.
+    """
+    compact: list[dict] = []
+    for r in search_result.get("results", []):
+        sim = r.get("similarity")
+        if sim is not None:
+            score = float(sim)
+        else:
+            fts_rank = r.get("fts_rank")
+            if fts_rank is not None:
+                abs_rank = abs(float(fts_rank))
+                score = abs_rank / (1.0 + abs_rank)
+            else:
+                score = 0.0
+        compact.append(
+            {
+                "text": r.get("text") or "",
+                "score": score,
+                "path": r.get("doc_path"),
+            }
+        )
+    return compact
 
 
 def fts_core(
@@ -1106,7 +1070,7 @@ def feedback_core(
     }
 
     FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(FEEDBACK_PATH, "a") as f:
+    with open(FEEDBACK_PATH, "a", encoding="utf-8") as f:
         f.write(_feedback_entry_to_yaml(entry))
 
     return entry
@@ -1117,7 +1081,7 @@ def list_feedback_core() -> dict:
     if not FEEDBACK_PATH.exists():
         return {"count": 0, "entries": []}
 
-    text = FEEDBACK_PATH.read_text()
+    text = FEEDBACK_PATH.read_text(encoding="utf-8")
     if not text.strip():
         return {"count": 0, "entries": []}
 

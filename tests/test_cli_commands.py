@@ -327,14 +327,23 @@ class TestCmdSearch:
             cmd_search("query", cfg)
 
     def test_basic_search(self, populated_db, capsys):
+        import json as _json
+
         client = _mock_openai_client(embed_dims=4)
         with patch("kb.api.OpenAI", return_value=client):
             cmd_search("install", populated_db, top_k=5)
 
         out = capsys.readouterr().out
+        # Default is compact Semble-compatible JSON: bare list of text/score/path.
+        data = _json.loads(out)
+        assert isinstance(data, list)
+        assert len(data) > 0
+        for item in data:
+            assert set(item.keys()) == {"text", "score", "path"}
         assert "install" in out.lower()
-        assert "Embed:" in out
-        assert "Vec:" in out
+        # No human-readable diagnostics on stdout by default.
+        assert "Embed:" not in out
+        assert "HyDE" not in out
 
     def test_human_search_output_uses_color_when_forced(
         self, populated_db, capsys, monkeypatch
@@ -343,7 +352,7 @@ class TestCmdSearch:
         monkeypatch.setenv("FORCE_COLOR", "1")
         client = _mock_openai_client(embed_dims=4)
         with patch("kb.api.OpenAI", return_value=client):
-            cmd_search("install", populated_db, top_k=5)
+            cmd_search("install", populated_db, top_k=5, print_output=True)
 
         out = capsys.readouterr().out
         assert "\x1b[" in out
@@ -365,22 +374,36 @@ class TestCmdSearch:
     def test_search_with_filter(self, populated_db, capsys):
         client = _mock_openai_client(embed_dims=4)
         with patch("kb.api.OpenAI", return_value=client):
-            cmd_search('file:docs/*.md +"install" search query', populated_db, top_k=5)
+            cmd_search(
+                'file:docs/*.md +"install" search query',
+                populated_db,
+                top_k=5,
+                print_output=True,
+            )
 
         out = capsys.readouterr().out
         assert "Filters:" in out
 
     def test_search_top_k(self, populated_db, capsys):
+        import json as _json
+
         client = _mock_openai_client(embed_dims=4)
         with patch("kb.api.OpenAI", return_value=client):
             cmd_search("query", populated_db, top_k=1)
 
         out = capsys.readouterr().out
-        # Should have at most 1 result block
-        assert out.count("--- [") <= 1
+        data = _json.loads(out)
+        assert len(data) <= 1
+        # Same top-k behavior in --print mode.
+        with patch("kb.api.OpenAI", return_value=client):
+            cmd_search("query", populated_db, top_k=1, print_output=True)
+        out_print = capsys.readouterr().out
+        assert out_print.count("--- [") <= 1
 
     def test_threshold_reduces_result_count(self, tmp_path, capsys):
         """Threshold should remove low-similarity results, not backfill with FTS-only."""
+        import json as _json
+
         cfg = Config(embed_dims=4, search_threshold=0.99)
         cfg.scope = "project"
         cfg.config_dir = tmp_path
@@ -429,14 +452,17 @@ class TestCmdSearch:
 
         out = capsys.readouterr().out
         # With threshold=0.99, low-similarity vec results should be removed,
-        # NOT replaced by FTS-only backfills
-        result_count = out.count("--- [")
+        # NOT replaced by FTS-only backfills. Default output is compact JSON.
+        data = _json.loads(out)
+        result_count = len(data)
         assert result_count < 2, (
             f"Expected threshold to reduce results, got {result_count}"
         )
 
     def test_threshold_does_not_backfill_fts(self, populated_db, capsys):
         """After threshold filtering, result count should be <= top_k, not padded."""
+        import json as _json
+
         client = _mock_openai_client(embed_dims=4)
         # Use a very far query vector so similarity is low
         client.embeddings.create.return_value.data = [MagicMock(embedding=[0.99] * 4)]
@@ -446,14 +472,14 @@ class TestCmdSearch:
             cmd_search("install", populated_db, top_k=5, threshold=0.0)
 
         out_no_filter = capsys.readouterr().out
-        count_no_filter = out_no_filter.count("--- [")
+        count_no_filter = len(_json.loads(out_no_filter))
 
         with patch("kb.api.OpenAI", return_value=client):
             # threshold=0.99 (strict filter) -> should get fewer results
             cmd_search("install", populated_db, top_k=5, threshold=0.99)
 
         out_filtered = capsys.readouterr().out
-        count_filtered = out_filtered.count("--- [")
+        count_filtered = len(_json.loads(out_filtered))
 
         assert count_filtered <= count_no_filter, (
             f"Strict threshold should not produce more results: "

@@ -22,6 +22,7 @@ from .api import (
     search_core,
     similar_core,
     stats_core,
+    to_compact_results,
 )
 from .chunk import CHONKIE_AVAILABLE
 from .config import (
@@ -58,7 +59,7 @@ Usage:
   kb sources                     List configured sources
   kb index [DIR...] [--no-size-limit] [--include PATTERN ...]  Index sources (skip files > max_file_size_mb)
   kb allow <file>                Whitelist a large file for indexing
-  kb search "query" [k] [--threshold N] [--expand] [--json|--csv|--md]  Hybrid search (default k=5)
+  kb search "query" [k] [--threshold N] [--print] [--json|--csv|--md]  Pure retrieval, compact JSON by default (default k=5; --print for human-readable)
   kb fts "query" [k] [--json|--csv|--md]          Keyword-only search (no embedding, instant)
   kb ask "question" [k] [--threshold N] [--expand] [--json|--csv|--md]  RAG: search + answer (default k=8)
   kb similar <file> [k]          Find similar documents (no API call, default k=10)
@@ -359,6 +360,14 @@ def _parse_output_format(args: list[str]) -> str | None:
     return None
 
 
+def _parse_print_flag(args: list[str]) -> bool:
+    """Extract and remove --print flag. True means human-readable output."""
+    if "--print" in args:
+        args.remove("--print")
+        return True
+    return False
+
+
 def _format_csv(rows: list[dict], columns: list[str]) -> str:
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
@@ -384,18 +393,21 @@ def cmd_search(
     top_k: int = 5,
     threshold: float | None = None,
     output_format: str | None = None,
+    print_output: bool = False,
 ):
+    """Pure retrieval with Semble-compatible compact JSON by default.
+
+    Default (no flags) and ``--json`` alias: bare list of
+    ``{"text", "score", "path"}`` via ``ensure_ascii=False``.
+    ``--print``: explicit human-readable output using the same ranked objects.
+    """
     try:
         result = search_core(query, cfg, top_k, threshold)
     except NoIndexError as e:
         print_error(str(e))
         sys.exit(1)
 
-    if output_format == "json":
-        print(json.dumps(result, ensure_ascii=False))
-        return
-
-    if output_format in ("csv", "md"):
+    if output_format in ("csv", "md") and not print_output:
         cols = [
             "rank",
             "doc_path",
@@ -414,68 +426,68 @@ def cmd_search(
         print(formatter(rows, cols), end="" if output_format == "csv" else "\n")
         return
 
-    clean_query = result["query"]
-    timing = result["timing_ms"]
-    candidates = result["candidates"]
+    if print_output:
+        clean_query = result["query"]
+        timing = result["timing_ms"]
 
-    if result.get("filters"):
+        if result.get("filters"):
+            print(
+                label(
+                    "Filters",
+                    ", ".join(f"{k}={v}" for k, v in result["filters"].items()),
+                )
+            )
+
+        print(label("Query", f'"{clean_query}"'))
         print(
-            label(
-                "Filters",
-                ", ".join(f"{k}={v}" for k, v in result["filters"].items()),
+            style(
+                f"Embed: {timing['embed']}ms | "
+                f"Vec: {timing['vec']}ms | FTS: {timing['fts']}ms",
+                "metric",
+            )
+        )
+        candidates = result["candidates"]
+        print(
+            style(
+                f"Candidates: {candidates['vec']} vec, {candidates['fts']} fts -> "
+                f"{candidates['fused']} fused",
+                "muted",
             )
         )
 
-    print(label("Query", f'"{clean_query}"'))
-    hyde_tag = f"HyDE: {timing['hyde']}ms | " if timing.get("hyde") else ""
-    expand_tag = f"Expand: {timing['expand']}ms | " if timing.get("expand") else ""
-    print(
-        style(
-            f"{hyde_tag}{expand_tag}Embed: {timing['embed']}ms | "
-            f"Vec: {timing['vec']}ms | FTS: {timing['fts']}ms",
-            "metric",
-        )
-    )
-    print(
-        style(
-            f"Candidates: {candidates['vec']} vec, {candidates['fts']} fts -> "
-            f"{candidates['fused']} fused",
-            "muted",
-        )
-    )
-
-    if result.get("expansions"):
-        lex = [e["text"] for e in result["expansions"] if e["type"] == "lex"]
-        vec = [e["text"] for e in result["expansions"] if e["type"] == "vec"]
-        parts = []
-        if lex:
-            parts.append(f"lex{lex}")
-        if vec:
-            parts.append(f"vec{vec}")
-        print(label("Expansions", " ".join(parts)))
-
-    print()
-
-    for r in result["results"]:
-        sim = (
-            f"sim:{r['similarity']:.3f}" if r["similarity"] is not None else "fts-only"
-        )
-        source_tag = "+".join(r["sources"])
-        print(
-            result_header(
-                r["rank"],
-                r["doc_path"],
-                f"{sim}, {source_tag}, rrf:{r['rrf_score']:.4f}",
-            )
-        )
-        if r["heading"]:
-            print(f"    {label('Section', style(r['heading'], 'heading'))}")
-        preview = _best_snippet(r["text"] or "", clean_query).replace("\n", "\n    ")
-        print(f"    {preview}")
-        if r["text"] and len(r["text"]) > 500:
-            total_chars = len(r["text"])
-            print(f"    {style(f'({total_chars} chars total)', 'muted')}")
         print()
+
+        for r in result["results"]:
+            sim = (
+                f"sim:{r['similarity']:.3f}"
+                if r["similarity"] is not None
+                else "fts-only"
+            )
+            source_tag = "+".join(r["sources"])
+            print(
+                result_header(
+                    r["rank"],
+                    r["doc_path"],
+                    f"{sim}, {source_tag}, rrf:{r['rrf_score']:.4f}",
+                )
+            )
+            if r["heading"]:
+                print(f"    {label('Section', style(r['heading'], 'heading'))}")
+            preview = _best_snippet(r["text"] or "", clean_query).replace(
+                "\n", "\n    "
+            )
+            print(f"    {preview}")
+            if r["text"] and len(r["text"]) > 500:
+                total_chars = len(r["text"])
+                print(f"    {style(f'({total_chars} chars total)', 'muted')}")
+            print()
+        return
+
+    # Default compact Semble-compatible output (also via --json alias).
+    # Bare list of {"text", "score", "path"}; valid JSON; real Unicode.
+    compact = to_compact_results(result)
+    print(json.dumps(compact, ensure_ascii=False))
+    return
 
 
 def cmd_fts(
@@ -1095,7 +1107,7 @@ _kb() {{
         COMPREPLY=( $(compgen -W "--list --tool --severity --context --agent-id --error-trace" -- "$cur") )
         ;;
       search|ask)
-        COMPREPLY=( $(compgen -W "--threshold --expand --no-expand --json --csv --md" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--threshold --expand --no-expand --json --csv --md --print" -- "$cur") )
         ;;
       fts)
         COMPREPLY=( $(compgen -W "--json --csv --md" -- "$cur") )
@@ -1123,7 +1135,7 @@ complete -F _kb kb"""
         )
         print(
             "complete -c kb -n '__fish_seen_subcommand_from search ask' "
-            "-a '--threshold --expand --no-expand --json --csv --md'"
+            "-a '--threshold --expand --no-expand --json --csv --md --print'"
         )
         print(
             "complete -c kb -n '__fish_seen_subcommand_from fts' -a '--json --csv --md'"
@@ -1215,7 +1227,7 @@ def main():
 
     scope_label = f"[{cfg.scope}]" if cfg.config_path else "[no config]"
     if cfg.config_path:
-        print(f"Config: {cfg.config_path} {scope_label}")
+        print(f"Config: {cfg.config_path} {scope_label}", file=sys.stderr)
 
     # Per-subcommand help
     sub_help = len(args) > 1 and args[1] in ("-h", "--help")
@@ -1254,12 +1266,13 @@ def main():
     elif cmd == "search":
         if len(args) < 2 or sub_help:
             print(
-                'Usage: kb search "query" [k] [--threshold N] [--expand] [--json|--csv|--md]'
+                'Usage: kb search "query" [k] [--threshold N] [--print] [--json|--csv|--md]'
             )
             sys.exit(0 if sub_help else 1)
         threshold = None
         search_args = list(args[1:])
         out_fmt = _parse_output_format(search_args)
+        print_output = _parse_print_flag(search_args)
         if "--expand" in search_args:
             search_args.remove("--expand")
             cfg = copy(cfg)
@@ -1278,7 +1291,12 @@ def main():
                 sys.exit(1)
         top_k = int(search_args[1]) if len(search_args) > 1 else 5
         cmd_search(
-            search_args[0], cfg, top_k, threshold=threshold, output_format=out_fmt
+            search_args[0],
+            cfg,
+            top_k,
+            threshold=threshold,
+            output_format=out_fmt,
+            print_output=print_output,
         )
     elif cmd == "fts":
         if len(args) < 2 or sub_help:
