@@ -17,7 +17,7 @@ from .cost import (
     usage_tokens,
 )
 from .db import connect
-from .embed import deserialize_f32, embed_batch, serialize_f32
+from .embed import deserialize_f32, embed_batch, openai_client_kwargs, serialize_f32
 from .expand import expand_query
 from .filters import (
     apply_filters,
@@ -213,7 +213,9 @@ def search_core(
     _require_index(cfg)
 
     conn = connect(cfg)
-    client = OpenAI() if cfg.embed_method != "local" else None
+    client = (
+        OpenAI(**openai_client_kwargs(cfg)) if cfg.embed_method != "local" else None
+    )
 
     clean_query, filters = parse_filters(query)
     has_filters = has_active_filters(filters)
@@ -432,7 +434,7 @@ def ask_core(
     _require_index(cfg)
 
     conn = connect(cfg)
-    client = OpenAI()
+    client = OpenAI(**openai_client_kwargs(cfg))
 
     clean_question, filters = parse_filters(question)
     has_filters = has_active_filters(filters)

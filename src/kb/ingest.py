@@ -13,7 +13,7 @@ from openai import OpenAI
 from .chunk import CHONKIE_AVAILABLE, chunk_markdown, chunk_plain_text, embedding_text
 from .config import Config
 from .db import connect, fts_path
-from .embed import embed_batch, serialize_f32
+from .embed import embed_batch, openai_client_kwargs, serialize_f32
 from .extract import extract_text, supported_extensions, unavailable_formats
 from .terminal import label, style
 
@@ -220,7 +220,9 @@ def _index_file(
 def index_directory(dir_path: Path, cfg: Config, *, no_size_limit: bool = False):
     """Index all supported document files in a directory."""
     conn = connect(cfg)
-    client = OpenAI() if cfg.embed_method != "local" else None
+    client = (
+        OpenAI(**openai_client_kwargs(cfg)) if cfg.embed_method != "local" else None
+    )
 
     ignore_patterns = _load_ignore_patterns(dir_path)
     exts = supported_extensions(include_code=cfg.index_code)

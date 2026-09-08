@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import struct
+import urllib.parse
 import warnings
 
 from openai import OpenAI
@@ -12,6 +13,76 @@ from .config import Config
 
 # Lazy-loaded SentenceTransformer model cache (same pattern as rerank.py)
 _embed_model_cache: dict[str, object] = {}
+
+# Hosts treated as local OpenAI-compatible servers (no API key required).
+_LOCAL_OPENAI_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+# Harmless placeholder used only when the OpenAI SDK insists on an api_key
+# for local endpoints. Never derived from a real secret.
+_DUMMY_OPENAI_API_KEY = "local-dummy-key"
+
+
+def normalize_openai_base_url(raw: str | None) -> str:
+    """Normalize a configured OpenAI base URL.
+
+    Strips surrounding whitespace and trailing slashes so values like
+    ``"  http://localhost:1234/v1/  "`` and ``"http://localhost:1234/v1"``
+    map to the same endpoint. Returns ``""`` when unset.
+    """
+    if not raw:
+        return ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    return text.rstrip("/")
+
+
+def is_local_openai_base_url(base_url: str | None) -> bool:
+    """Return True when a base URL points at a local loopback endpoint."""
+    normalized = normalize_openai_base_url(base_url)
+    if not normalized:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(normalized)
+        host = parsed.hostname
+        if host is None and "://" not in normalized:
+            host = urllib.parse.urlparse("http://" + normalized).hostname
+        if not host:
+            return False
+        return host.lower() in _LOCAL_OPENAI_HOSTS
+    except Exception:
+        return False
+
+
+def openai_client_kwargs(cfg: Config) -> dict:
+    """Build ``OpenAI(...)`` kwargs from ``cfg.openai_base_url``.
+
+    - No base URL: ``{}`` (default OpenAI behavior, API key required).
+    - Local base URL (localhost / 127.0.0.1): ``base_url`` plus the
+      existing ``OPENAI_API_KEY`` when set, otherwise a harmless dummy
+      key so the SDK does not raise. The key value is never printed.
+    - Remote custom base URL: ``base_url`` only, so the SDK retains its
+      normal ``OPENAI_API_KEY`` requirement.
+    """
+    base_url = normalize_openai_base_url(getattr(cfg, "openai_base_url", ""))
+    if not base_url:
+        return {}
+    if is_local_openai_base_url(base_url):
+        api_key = os.environ.get("OPENAI_API_KEY") or _DUMMY_OPENAI_API_KEY
+        return {"base_url": base_url, "api_key": api_key}
+    return {"base_url": base_url}
+
+
+def create_openai_client(cfg: Config) -> OpenAI:
+    """Create an OpenAI client honoring ``cfg.openai_base_url``."""
+    return OpenAI(**openai_client_kwargs(cfg))
+
+
+def create_embedding_client(cfg: Config) -> OpenAI | None:
+    """Create the client used for embeddings, or None for local method."""
+    if cfg.embed_method == "local":
+        return None
+    return create_openai_client(cfg)
 
 
 def serialize_f32(vec: list[float]) -> bytes:
