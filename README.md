@@ -10,17 +10,17 @@ CLI RAG tool for your docs. Index 30+ document formats (markdown, PDF, DOCX, EPU
 
 ## Features
 
-- **Hybrid search** — vector similarity + FTS5 keyword search, fused with Reciprocal Rank Fusion (with rank bonuses)
-- **HyDE best-of-two** — generates a hypothetical answer passage, embeds both it and the raw query, keeps whichever vec result set is better (local via transformers or LLM API; enabled by default, can only help never hurt)
+- **Hybrid search** — vector similarity + FTS5 keyword search, fused with Reciprocal Rank Fusion (with rank bonuses). `kb search` is pure retrieval (no chat model, no HyDE, no query expansion) and prints compact Semble-compatible JSON `[{"text", "score", "path"}]` by default (`--print` for human-readable)
+- **HyDE best-of-two** — `kb ask` generates a hypothetical answer passage, embeds both it and the raw query, keeps whichever vec result set is better (local via transformers or LLM API; enabled by default, can only help never hurt). `kb search` never invokes HyDE
 - **Keyword-only search** — `kb fts` for instant BM25 results with zero API cost (truncated filepath matches weighted 10x, headings 2x)
 - **Heading-aware chunking** — markdown split by heading hierarchy, each chunk carries ancestry
 - **Incremental indexing** — content-hash per chunk, only re-embeds changes
-- **Query expansion** — generates keyword synonyms (for FTS) and semantic rephrasings (for vector search) via local FLAN-T5 or LLM, fuses all result lists with multi-list weighted RRF (`--expand`)
+- **Query expansion** — `kb ask` generates keyword synonyms (for FTS) and semantic rephrasings (for vector search) via local FLAN-T5 or LLM, fuses all result lists with multi-list weighted RRF (`--expand`). Accepted on `kb search` for backward compatibility but ignored (search is retrieval-only)
 - **Reranking** — `ask` over-fetches candidates, reranks by relevance (local cross-encoder or LLM), keeps the best
 - **Pre-search filters** — file globs, document type, tags, date ranges, keyword inclusion/exclusion
 - **Document tagging** — manual tags via `kb tag`, auto-parsed from markdown frontmatter
 - **Similar documents** — find related docs using stored embeddings (no API call)
-- **30+ formats** — markdown, PDF, DOCX, PPTX, XLSX, EPUB, HTML, ODT, ODS, ODP, RTF, email (.eml), subtitles (.srt/.vtt), and plain text variants (.txt, .rst, .org, .csv, .json, .yaml, .tex, etc.)
+- **30+ formats** — markdown, PDF, DOCX, PPTX, XLSX, EPUB, HTML, ODT, ODS, ODP, RTF, email (.eml), subtitles (.srt/.vtt), and plain text variants (.txt, .rst, .org, .csv, .json, .yaml, .tex, etc.). Text decoded explicitly as UTF-8 (CJK-safe; indexes built before this fix need `kb reset` + `kb index`)
 - **Optional code indexing** — set `index_code = true` to also index source code files (.py, .js, .ts, .go, .rs, etc.)
 - **Local or API embeddings** — local via `ibm-granite/granite-embedding-english-r2` (sentence-transformers, no API cost, fully offline, auto-detected dims) or OpenAI API — config-driven switch
 - **Pluggable chunking** — uses [chonkie](https://github.com/bhavnicksm/chonkie) when available, regex fallback otherwise
@@ -64,7 +64,7 @@ kb add ~/notes ~/docs ~/repos/my-project/docs
 # 3. Index
 kb index
 
-# 4. Search (hybrid: semantic + keyword)
+# 4. Search (pure retrieval; compact JSON by default, --print for human-readable)
 kb search "deployment patterns"
 
 # 5. Quick keyword search (instant, no API cost)
@@ -89,7 +89,7 @@ kb add <dir> [dir...]          Add source directories
 kb remove <dir> [dir...]       Remove source directories
 kb sources                     List configured sources
 kb index [DIR...]              Index sources from config (or explicit dirs)
-kb search "query" [k] [--threshold N] [--expand] [--json|--csv|--md]  Hybrid search (default k=5)
+kb search "query" [k] [--threshold N] [--print] [--json|--csv|--md]  Pure retrieval, compact JSON by default (default k=5; --print for human-readable)
 kb fts "query" [k] [--json|--csv|--md]            Keyword-only search (instant, no API cost)
 kb ask "question" [k] [--threshold N] [--expand] [--json|--csv|--md]  RAG answer (default k=8, BM25 shortcut when confident)
 kb list                        Summary of indexed documents by type
@@ -151,13 +151,13 @@ sources = [
 # rerank_top_k = 5
 # rerank_method = "llm"     # "llm" (RankGPT) or "cross-encoder" (local, no API cost)
 # cross_encoder_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-# hyde_enabled = true       # generate hypothetical passage before vector search
+# hyde_enabled = true       # generate hypothetical passage before vector search (kb ask only; kb search never uses HyDE)
 # hyde_model = ""           # LLM for HyDE ("" = use chat_model)
 # hyde_method = "llm"      # "llm" (OpenAI API) or "local" (transformers, no API cost)
 # hyde_local_model = "Qwen/Qwen3-0.6B"  # HF model for local HyDE method
 # hyde_base_url = ""        # base URL for HyDE LLM ("" = use default OpenAI)
 # hyde_api_key = ""         # API key for HyDE LLM ("" = use default; supports "env:VAR_NAME")
-# query_expand = false     # generate keyword + semantic query expansions (also --expand flag)
+# query_expand = false     # generate keyword + semantic query expansions (kb ask only; accepted on kb search but ignored)
 # expand_method = "local"  # "local" (FLAN-T5) or "llm" (OpenAI API)
 # expand_model = "google/flan-t5-small"  # model for local expand method
 # bm25_shortcut_min = 0.85 # min normalized BM25 for ask shortcut
@@ -269,7 +269,7 @@ Run `kb formats` to see which formats are available in your installation.
 ```
 kb index
   1. Find files matching supported formats (respecting .kbignore)
-  2. Extract text (format-specific: markdown, PDF, DOCX, HTML, etc.)
+  2. Extract text (format-specific: markdown, PDF, DOCX, HTML, etc.; text decoded explicitly as UTF-8)
   3. Content-hash check — skip unchanged files
   4. Chunk (chonkie or regex fallback)
   5. Diff chunks by hash — only embed new/changed
@@ -278,12 +278,13 @@ kb index
 
 kb search "query"
   1. Parse filters, strip from query
-  2. HyDE best-of-two: embed both raw query + hypothetical passage, keep better vec results
-  3. [Expand]: generate keyword synonyms + semantic rephrasings (if --expand)
-  4. Vector search (vec0 cosine MATCH) + FTS5 keyword search (original + expansion queries)
-  5. Pre-filter by tagged chunk IDs if tag: filter active
-  6. Fuse with multi-list weighted RRF (primary 2x, expansions 1x)
-  7. Apply remaining filters, display results
+  2. Embed raw query only (no HyDE, no expansion; embedding backend only)
+  3. Vector search (vec0 cosine MATCH) + FTS5 keyword search
+  4. Pre-filter by tagged chunk IDs if tag: filter active
+  5. Fuse with RRF, apply remaining filters
+  6. Output compact JSON [{"text", "score", "path"}] by default (--print for human-readable).
+     score = cosine similarity (normalized-BM25 fallback for FTS-only matches);
+     diagnostics go to stderr so stdout stays parseable
 
 kb fts "query"
   1. Parse filters, strip from query
@@ -296,12 +297,15 @@ kb ask "question"
   1. BM25 probe — dedup by document, if top doc is high-confidence, skip to step 7
   2. HyDE best-of-two: embed both raw query + hypothetical passage, keep better vec results
   3. [Expand]: generate keyword synonyms + semantic rephrasings (if --expand)
-  4. Same as search (with expansion), but over-fetch 20
+  4. Same retrieval as search (with expansion), but over-fetch 20
   5. Pre-filter by tagged chunk IDs, then apply remaining filters
   6. Rerank -> top 5 (cross-encoder or LLM)
   7. Confidence threshold
   8. LLM generates answer from context
 ```
+
+Note: databases indexed before the UTF-8 fix contain mojibake — rebuild with
+`kb reset` + `kb index` (incremental indexing behavior is unchanged).
 
 ## MCP Server
 
@@ -331,7 +335,7 @@ claude mcp add kb kb-mcp
 
 | Tool | Description |
 |------|-------------|
-| `kb_search` | Hybrid semantic + keyword search with inline filters |
+| `kb_search` | Pure-retrieval hybrid semantic + keyword search, no LLM/HyDE, inline filters |
 | `kb_ask` | Full RAG pipeline: search + rerank + LLM answer |
 | `kb_fts` | Keyword-only search (no API cost) |
 | `kb_similar` | Find similar documents (no API call) |
