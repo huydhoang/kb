@@ -32,6 +32,7 @@ from .config import (
     PROJECT_CONFIG_FILE,
     PROJECT_CONFIG_TEMPLATE,
     Config,
+    ConfigError,
     _project_db_path,
     find_config,
     load_secrets,
@@ -103,7 +104,7 @@ def cmd_init(project: bool):
         if cfg_path.exists():
             print_error(f"{PROJECT_CONFIG_FILE} already exists at {cfg_path}")
             sys.exit(1)
-        cfg_path.write_text(PROJECT_CONFIG_TEMPLATE)
+        cfg_path.write_text(PROJECT_CONFIG_TEMPLATE, encoding="utf-8")
         print(style(f"Created {cfg_path}", "success"))
         db_path = _project_db_path(Path.cwd())
         print(label("Database", style(db_path, "path")))
@@ -119,7 +120,7 @@ def cmd_init(project: bool):
             sys.exit(1)
         GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         GLOBAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        GLOBAL_CONFIG_FILE.write_text(GLOBAL_CONFIG_TEMPLATE)
+        GLOBAL_CONFIG_FILE.write_text(GLOBAL_CONFIG_TEMPLATE, encoding="utf-8")
         print(style(f"Created {GLOBAL_CONFIG_FILE}", "success"))
         print(label("Database", style(GLOBAL_DATA_DIR / "kb.db", "path")))
         print(style("Add sources with: kb add ~/notes ~/docs", "muted"))
@@ -1065,7 +1066,11 @@ complete -F _kb kb"""
 
 
 def main():
-    load_secrets()
+    try:
+        load_secrets()
+    except ConfigError as e:
+        print_error(str(e))
+        sys.exit(1)
     args = sys.argv[1:]
 
     if not args:
@@ -1129,7 +1134,11 @@ def main():
         sys.exit(0)
 
     # All other commands need config
-    cfg = find_config()
+    try:
+        cfg = find_config()
+    except ConfigError as e:
+        print_error(str(e))
+        sys.exit(1)
 
     scope_label = f"[{cfg.scope}]" if cfg.config_path else "[no config]"
     if cfg.config_path:

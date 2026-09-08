@@ -14,7 +14,7 @@ from .api import (
     similar_core,
     stats_core,
 )
-from .config import Config, find_config, load_secrets
+from .config import Config, ConfigError, find_config, load_secrets
 
 mcp = FastMCP(
     "kb",
@@ -64,7 +64,7 @@ def kb_search(
     try:
         cfg = _with_expand(_get_config(), expand)
         return search_core(query, cfg, top_k, threshold)
-    except KBError as e:
+    except (KBError, ConfigError) as e:
         return {"error": str(e)}
 
 
@@ -90,7 +90,7 @@ def kb_ask(
     try:
         cfg = _with_expand(_get_config(), expand)
         return ask_core(question, cfg, top_k, threshold)
-    except KBError as e:
+    except (KBError, ConfigError) as e:
         return {"error": str(e)}
 
 
@@ -106,7 +106,7 @@ def kb_fts(query: str, top_k: int = 5) -> dict:
     """
     try:
         return fts_core(query, _get_config(), top_k)
-    except KBError as e:
+    except (KBError, ConfigError) as e:
         return {"error": str(e)}
 
 
@@ -120,20 +120,26 @@ def kb_similar(file_path: str, top_k: int = 10) -> dict:
     """
     try:
         return similar_core(file_path, _get_config(), top_k)
-    except KBError as e:
+    except (KBError, ConfigError) as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
 def kb_status() -> dict:
     """Show index statistics: document count, chunk count, DB size, etc."""
-    return stats_core(_get_config())
+    try:
+        return stats_core(_get_config())
+    except ConfigError as e:
+        return {"error": str(e)}
 
 
 @mcp.tool()
 def kb_list() -> dict:
     """List all indexed documents with type, size, and chunk count."""
-    return list_core(_get_config())
+    try:
+        return list_core(_get_config())
+    except ConfigError as e:
+        return {"error": str(e)}
 
 
 @mcp.tool()

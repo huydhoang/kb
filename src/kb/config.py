@@ -10,6 +10,11 @@ PROJECT_CONFIG_FILE = ".kb.toml"
 SECRETS_PATH = Path.home() / ".config" / "kb" / "secrets.toml"
 SCHEMA_VERSION = 9
 
+
+class ConfigError(Exception):
+    """Raised when a kb config file cannot be read (bad encoding or TOML)."""
+
+
 GLOBAL_CONFIG_DIR = Path.home() / ".config" / "kb"
 GLOBAL_CONFIG_FILE = GLOBAL_CONFIG_DIR / "config.toml"
 GLOBAL_DATA_DIR = Path.home() / ".local" / "share" / "kb"
@@ -40,8 +45,8 @@ sources = [
 # min_chunk_chars = 50
 
 # Search
-# search_threshold = 0.001  # min cosine similarity for `kb search` (0.0–1.0)
-# ask_threshold = 0.001     # min cosine similarity for `kb ask` (0.0–1.0)
+# search_threshold = 0.001  # min cosine similarity for `kb search` (0.0-1.0)
+# ask_threshold = 0.001     # min cosine similarity for `kb ask` (0.0-1.0)
 # rrf_k = 60.0              # RRF smoothing constant
 # rerank_fetch_k = 20       # candidates to fetch for LLM rerank
 # rerank_top_k = 5          # how many to keep after rerank
@@ -195,8 +200,16 @@ def load_secrets() -> None:
     """
     if not SECRETS_PATH.is_file():
         return
-    with open(SECRETS_PATH, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(SECRETS_PATH, "rb") as f:
+            data = tomllib.load(f)
+    except UnicodeDecodeError as e:
+        raise ConfigError(
+            f"Secrets file {SECRETS_PATH} is not valid UTF-8 ({e}). "
+            "Convert it to UTF-8 (e.g. re-save with UTF-8 encoding) and retry."
+        ) from e
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"Secrets file {SECRETS_PATH} is not valid TOML: {e}") from e
     for key, value in data.items():
         env_key = key.upper()
         if env_key not in os.environ:
@@ -215,8 +228,18 @@ def _project_db_path(config_dir: Path) -> Path:
 
 def _load_toml(cfg_path: Path, scope: str) -> Config:
     """Load a TOML config file and return a Config."""
-    with open(cfg_path, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(cfg_path, "rb") as f:
+            data = tomllib.load(f)
+    except UnicodeDecodeError as e:
+        raise ConfigError(
+            f"Config file {cfg_path} is not valid UTF-8 ({e}). "
+            "It was likely saved with a Windows ANSI encoding (e.g. CP1252). "
+            "Convert it to UTF-8 and retry, or delete it and re-run "
+            "'kb init' / 'kb init --project' to regenerate."
+        ) from e
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"Config file {cfg_path} is not valid TOML: {e}") from e
     cfg = Config(**{k: v for k, v in data.items() if k in Config.__dataclass_fields__})
     cfg.scope = scope
     cfg.config_dir = cfg_path.parent
@@ -284,4 +307,4 @@ def save_config(cfg: Config) -> None:
         default_val = getattr(defaults, fname)
         if val != default_val:
             data[fname] = val
-    cfg.config_path.write_text(_to_toml(data))
+    cfg.config_path.write_text(_to_toml(data), encoding="utf-8")

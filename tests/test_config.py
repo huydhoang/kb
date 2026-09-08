@@ -265,3 +265,37 @@ class TestSaveConfig:
         loaded = _load_toml(cfg.config_path, "project")
         assert loaded.sources == ["notes/", "docs/"]
         assert loaded.max_chunk_chars == 3000
+
+
+class TestWindowsEncoding:
+    def test_templates_are_ascii_only(self):
+        from kb.config import GLOBAL_CONFIG_TEMPLATE, PROJECT_CONFIG_TEMPLATE
+
+        # Templates must stay ASCII-only so a Windows ANSI write can never
+        # produce invalid UTF-8 (regression test for cp1252 0x96 bug).
+        assert all(ord(c) < 128 for c in PROJECT_CONFIG_TEMPLATE)
+        assert all(ord(c) < 128 for c in GLOBAL_CONFIG_TEMPLATE)
+
+    def test_load_cp1252_raises_config_error(self, tmp_path):
+        from kb.config import ConfigError
+
+        # Byte 0x96 is EN DASH in CP1252 — the exact failure from the report.
+        cfg_path = tmp_path / ".kb.toml"
+        cfg_path.write_bytes(b"sources = []\n# comment \x96 broken\n")
+        try:
+            _load_toml(cfg_path, "project")
+            raise AssertionError("expected ConfigError")
+        except ConfigError as e:
+            assert "UTF-8" in str(e)
+            assert str(cfg_path) in str(e)
+
+    def test_save_and_load_chinese_sources(self, tmp_path):
+        cfg = Config(sources=["\u6587\u6863/test", "canonical"])
+        cfg.config_path = tmp_path / ".kb.toml"
+        cfg.config_dir = tmp_path
+        save_config(cfg)
+
+        # Must be valid UTF-8 on disk (not Windows ANSI).
+        cfg.config_path.read_bytes().decode("utf-8")
+        loaded = _load_toml(cfg.config_path, "project")
+        assert loaded.sources == ["\u6587\u6863/test", "canonical"]
