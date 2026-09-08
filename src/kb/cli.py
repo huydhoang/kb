@@ -43,7 +43,7 @@ from .cost import format_usd
 from .db import connect, reset
 from .extract import supported_extensions, unavailable_formats
 from .ingest import index_directory
-from .terminal import label, print_error, result_header, style
+from .terminal import ensure_utf8_stdio, label, print_error, result_header, style
 
 USAGE = """\
 kb — CLI knowledge base powered by sqlite-vec
@@ -1151,6 +1151,9 @@ complete -F _kb kb"""
 
 
 def main():
+    # UTF-8 stdio first so CJK output never fails on Windows/agent shells.
+    # Reconfigure-only: no locale or code-page changes.
+    ensure_utf8_stdio()
     # Explicit project .env autoload for subprocess/agent shells that do not
     # load .env themselves. Applies equally to `kb search` and `kb ask`
     # (both dispatch below after this call). Never prints secret values.

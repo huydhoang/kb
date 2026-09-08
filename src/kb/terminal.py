@@ -47,3 +47,22 @@ def result_header(rank: int, path: str, meta: str) -> str:
 
 def print_error(message: str):
     print(style(message, "error"))
+
+
+def ensure_utf8_stdio() -> None:
+    """Ensure stdout/stderr use UTF-8 when supported (Windows-safe).
+
+    Calls ``reconfigure(encoding="utf-8", errors="replace")`` on
+    ``sys.stdout``/``sys.stderr`` when available so CJK output from agent
+    shells and Windows terminals does not raise ``UnicodeEncodeError``.
+    Never touches locale or system code page; silently no-ops when
+    ``reconfigure`` is unavailable (pipes, tests, older Pythons).
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
